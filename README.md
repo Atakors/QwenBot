@@ -43,13 +43,11 @@ docker compose up -d
    - **Name**: `qwen-telegram-bot`
    - **Region**: Choose closest to you
    - **Branch**: `main`
-   - **Runtime**: `Python 3`
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `python bot.py`
+   - **Environment**: **Docker**
    - **Plan**: **Free**
 5. Add **Environment Variables** (see Configuration table below)
 6. Click **"Create Web Service"**
-7. Wait ~2 minutes for deployment — your bot will start automatically!
+7. Wait ~3 minutes for Docker build — your bot will start automatically!
 
 > 💡 **Note on Free tier**: Render free instances sleep after 15 minutes of inactivity.
 > **To keep the bot running 24/7, use one of the methods below:**

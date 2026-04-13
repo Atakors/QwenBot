@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "WebSearch",
+      "WebFetch(github.com)",
+      "WebFetch(qwenlm.github.io)",
+      "WebFetch(www.alibabacloud.com)",
+      "Bash(setx *)",
+      "Bash(cmd *)",
+      "Bash(ping *)",
+      "Bash(pip install *)",
+      "Bash(tasklist *)",
+      "Bash(timeout *)",
+      "Bash(del *)",
+      "Bash(curl *)",
+      "Bash(git init)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git config *)"
+    ]
+  },
+  "$version": 3
+}

@@ -4,6 +4,7 @@ services:
     env: python
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.0
@@ -15,11 +16,21 @@ services:
         sync: false
       - key: QWEN_MODEL
         value: auto
-      - key: SYSTEM_PROMPT
-        value: You are a helpful AI assistant powered by Qwen. Respond concisely and helpfully.
       - key: ADMIN_IDS
         sync: false
       - key: RATE_LIMIT_SECONDS
         value: 3
       - key: MAX_HISTORY
         value: 10
+      - key: RENDER_URL
+        sync: false
+
+  - type: cron
+    name: bot-keep-alive
+    env: python
+    schedule: "*/5 * * * *"
+    buildCommand: pip install httpx
+    command: python keep_alive.py
+    envVars:
+      - key: RENDER_URL
+        sync: false

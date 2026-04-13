@@ -14,7 +14,9 @@ import re
 import sqlite3
 import tempfile
 import time
+import threading
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from threading import Lock
 
@@ -949,6 +951,33 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
+# Health Check Server (for Render.com uptime)
+# ─────────────────────────────────────────────
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/health" or self.path == "/":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(b"✅ QwenBot is running!")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass  # Suppress default logging
+
+
+def start_health_server(port: int = 8080):
+    """Start a background HTTP server for health checks."""
+    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info(f"🏥 Health check server running on port {port}")
+    return server
+
+
+# ─────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────
 def main():
@@ -1021,6 +1050,9 @@ def main():
         await application.bot.set_my_commands(all_cmds)
 
     asyncio.get_event_loop().run_until_complete(set_commands())
+
+    # Start health check server (for Render.com uptime)
+    start_health_server(port=8080)
 
     # Start polling
     logger.info("Bot is starting...")

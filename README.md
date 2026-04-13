@@ -51,7 +51,28 @@ docker compose up -d
 6. Click **"Create Web Service"**
 7. Wait ~2 minutes for deployment — your bot will start automatically!
 
-> 💡 **Note on Free tier**: Render free instances sleep after 15 minutes of inactivity. The bot will wake up automatically when messaged (may take ~30s on first response).
+> 💡 **Note on Free tier**: Render free instances sleep after 15 minutes of inactivity.
+> **To keep the bot running 24/7, use one of the methods below:**
+>
+> ### 🔄 Method 1: Render Cron Job (Recommended)
+> 1. In your Render Dashboard, click **"New +"** → **"Cron Job"**
+> 2. Connect the same **Atakors/QwenBot** repo
+> 3. Configure:
+>    - **Name**: `bot-keep-alive`
+>    - **Schedule**: `*/5 * * * *` (every 5 minutes)
+>    - **Build Command**: `pip install httpx`
+>    - **Start Command**: `python keep_alive.py`
+> 4. Add environment variable: `RENDER_URL` = your bot's URL (e.g. `https://qwen-telegram-bot.onrender.com`)
+> 5. Deploy! The cron job will ping your bot every 5 minutes, keeping it awake.
+>
+> ### 🌐 Method 2: UptimeRobot (Free Alternative)
+> 1. Go to [uptimerobot.com](https://uptimerobot.com) → Sign up (free)
+> 2. Add a new monitor:
+>    - **Monitor Type**: `HTTP(s)`
+>    - **Friendly Name**: `QwenBot Health`
+>    - **URL**: `https://YOUR-RENDER-URL.onrender.com/health`
+>    - **Monitoring Interval**: `5 minutes`
+> 3. Save — UptimeRobot will ping your bot every 5 min, keeping it awake!
 
 ## ⚙️ Configuration
 

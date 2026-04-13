@@ -34,6 +34,25 @@ python bot.py
 docker compose up -d
 ```
 
+### Option 3: Deploy to Render.com (Free)
+
+1. Go to [render.com](https://render.com) and sign up with GitHub
+2. Click **"New +"** → **"Web Service"**
+3. Connect your **Atakors/QwenBot** repository
+4. Configure:
+   - **Name**: `qwen-telegram-bot`
+   - **Region**: Choose closest to you
+   - **Branch**: `main`
+   - **Runtime**: `Python 3`
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `python bot.py`
+   - **Plan**: **Free**
+5. Add **Environment Variables** (see Configuration table below)
+6. Click **"Create Web Service"**
+7. Wait ~2 minutes for deployment — your bot will start automatically!
+
+> 💡 **Note on Free tier**: Render free instances sleep after 15 minutes of inactivity. The bot will wake up automatically when messaged (may take ~30s on first response).
+
 ## ⚙️ Configuration
 
 Edit `.env`:

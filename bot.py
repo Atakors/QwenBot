@@ -957,9 +957,9 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health" or self.path == "/":
             self.send_response(200)
-            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(b"✅ QwenBot is running!")
+            self.wfile.write("OK".encode("utf-8"))
         else:
             self.send_response(404)
             self.end_headers()

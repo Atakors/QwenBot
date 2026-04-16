@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Enhanced Qwen Telegram Bot - Rebuilt from scratch
-Features: Multi-model AI, streaming, images, voice, skills, persistence, admin panel
+Enhanced Qwen Telegram Bot
+Features: Multi-model AI, streaming, images, voice, persistence, admin panel
 """
 
 import asyncio
@@ -37,14 +37,10 @@ from telegram.ext import (
 )
 
 from skills import (
-    SKILL_COMMANDS,
-    AUTO_SKILLS,
-    handle_skill_command,
-    check_auto_skill,
-    get_skill_commands,
+    split_message,
     send_chunks,
+    escape_html,
 )
-from ai_skills import AI_SKILLS, auto_detect_skill
 
 # ─────────────────────────────────────────────
 # Load environment
@@ -79,16 +75,55 @@ RATE_LIMIT_SECONDS = int(os.getenv("RATE_LIMIT_SECONDS", "3"))
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "10"))
 
 # ─────────────────────────────────────────────
-# Available models
+# Available models - fetched from API
 # ─────────────────────────────────────────────
-AVAILABLE_MODELS = {
-    "auto": "🤖 Auto (Smart Select)",
-    "qwen-turbo": "⚡ Turbo (Fast)",
-    "qwen-plus": "⚖️ Plus (Balanced)",
-    "qwen-max": "🏆 Max (Best Quality)",
-    "qwen-long": "📚 Long (Long Context)",
-    "qwen-vl-max": "👁️ VL Max (Vision)",
-}
+AVAILABLE_MODELS = {}
+
+
+def fetch_available_models() -> dict:
+    """Fetch available models from DashScope API."""
+    models_map = {
+        "auto": "🤖 Auto (Smart Select)",
+    }
+    
+    try:
+        import httpx
+        api_base = DASHSCOPE_API_BASE.rstrip('/')
+        # Try to get models from /models endpoint
+        url = f"{api_base}/models" if '/compatible-mode' in api_base else f"{api_base}/v1/models"
+        
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(
+                url,
+                headers={"Authorization": f"Bearer {DASHSCOPE_API_KEY}"}
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                # Handle different API response formats
+                model_list = data.get("data", data.get("models", []))
+                for model in model_list:
+                    model_id = model.get("id", model.get("model", ""))
+                    if model_id and model_id.startswith("qwen"):
+                        # Clean model name for display
+                        display_name = model_id.replace("qwen-", "").title()
+                        models_map[model_id] = f"🤖 {display_name}"
+    except Exception as e:
+        logger.debug(f"Could not fetch models from API, using defaults: {e}")
+        # Fallback to known Qwen models
+        fallback_models = {
+            "qwen-turbo": "⚡ Turbo (Fast)",
+            "qwen-plus": "⚖️ Plus (Balanced)",
+            "qwen-max": "🏆 Max (Best Quality)",
+            "qwen-long": "📚 Long (Long Context)",
+            "qwen-vl-max": "👁️ VL Max (Vision)",
+        }
+        models_map.update(fallback_models)
+    
+    return models_map
+
+
+# Fetch models at startup
+AVAILABLE_MODELS = fetch_available_models()
 
 # ─────────────────────────────────────────────
 # Auto model selection rules
@@ -182,13 +217,6 @@ def init_db():
             username TEXT
         )
     """)
-
-    # Ensure optional columns exist
-    for col, col_type in [("active_skill", "TEXT"), ("temperature", "REAL"), ("max_tokens", "INTEGER")]:
-        try:
-            c.execute(f"ALTER TABLE user_settings ADD COLUMN {col} {col_type}")
-        except sqlite3.OperationalError:
-            pass  # Column already exists
 
     c.execute("""
         CREATE TABLE IF NOT EXISTS usage_stats (
@@ -341,47 +369,6 @@ def set_user_system_prompt(user_id: int, prompt: str):
         conn.close()
 
 
-def get_user_skill(user_id: int) -> str | None:
-    """Get user's active AI skill."""
-    with db_lock:
-        conn = get_db()
-        try:
-            c = conn.cursor()
-            c.execute("SELECT active_skill FROM user_settings WHERE user_id = ?", (user_id,))
-            row = c.fetchone()
-            if row:
-                result = dict(row).get("active_skill")
-                conn.close()
-                return result or None
-        except sqlite3.OperationalError:
-            pass  # Column doesn't exist yet
-        conn.close()
-    return None
-
-
-def set_user_skill(user_id: int, skill_id: str):
-    """Set user's active AI skill."""
-    with db_lock:
-        conn = get_db()
-        # Ensure optional columns exist
-        for col, col_type in [("active_skill", "TEXT"), ("temperature", "REAL"), ("max_tokens", "INTEGER")]:
-            try:
-                conn.execute(f"ALTER TABLE user_settings ADD COLUMN {col} {col_type}")
-            except sqlite3.OperationalError:
-                pass
-        c = conn.cursor()
-        c.execute("SELECT user_id FROM user_settings WHERE user_id = ?", (user_id,))
-        if c.fetchone():
-            conn.execute("UPDATE user_settings SET active_skill = ? WHERE user_id = ?", (skill_id, user_id))
-        else:
-            conn.execute(
-                "INSERT INTO user_settings (user_id, model, system_prompt, username, active_skill) VALUES (?, ?, ?, ?, ?)",
-                (user_id, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, None, skill_id),
-            )
-        conn.commit()
-        conn.close()
-
-
 def save_message(user_id: int, role: str, content: str):
     with db_lock:
         conn = get_db()
@@ -479,13 +466,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🤖 I'm your <b>Qwen AI</b> assistant — ready to help!\n\n"
         f"✨ <b>Features:</b>\n"
         f"🧠 <b>Smart Model Selection</b> — I pick the best AI for your task\n"
-        f"💬 <b>Multi-Persona AI</b> — Code Expert, Writer, Tutor & more\n"
         f"🖼️ <b>Image Analysis</b> — Send photos for vision insights\n"
         f"🎤 <b>Voice Support</b> — Send voice notes for AI replies\n\n"
         f"📌 <b>Quick Start:</b>\n"
         f"• Just type your message\n"
         f"• /model — Choose AI model\n"
-        f"• /skill — Pick an AI persona\n"
         f"• /prompt — Customize my personality\n"
         f"• /help — See all commands",
         parse_mode="HTML",
@@ -501,7 +486,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /clear — Clear conversation\n\n"
         "🤖 <b>AI Settings:</b>\n"
         "  /model — Change AI model\n"
-        "  /skill — Choose AI persona\n"
         "  /prompt [text] — Set custom personality\n"
         "  /prompt reset — Reset to default\n\n"
         "📊 <b>Tools:</b>\n"
@@ -556,62 +540,6 @@ async def model_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         await query.edit_message_text("❌ Invalid model selected.")
-
-
-async def skill_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    active_skill = get_user_skill(user_id)
-
-    keyboard = []
-    row = []
-    for skill_id, skill_data in AI_SKILLS.items():
-        checkmark = "✅ " if skill_id == active_skill else ""
-        row.append(InlineKeyboardButton(f"{checkmark}{skill_data['name']}", callback_data=f"setskill_{skill_id}"))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("🔄 Reset to Default", callback_data="setskill_none")])
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    current = AI_SKILLS[active_skill]["name"] if active_skill else "None (Default AI)"
-    await update.message.reply_text(
-        f"🛠️ <b>AI Skills & Personas</b>\n\n"
-        f"Active: <b>{html.escape(current)}</b>\n\n"
-        f"Each skill changes the AI's <b>personality</b>, <b>model</b>, and <b>temperature</b>.\n"
-        f"Choose one below 👇",
-        parse_mode="HTML",
-        reply_markup=reply_markup,
-    )
-
-
-async def skill_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    selected = query.data.replace("setskill_", "")
-
-    if selected == "none":
-        set_user_skill(user_id, "")
-        await query.edit_message_text(
-            "✅ <b>AI Skill Reset!</b>\n\nBack to the default AI assistant.",
-            parse_mode="HTML",
-        )
-        return
-
-    if selected in AI_SKILLS:
-        skill = AI_SKILLS[selected]
-        set_user_skill(user_id, selected)
-        await query.edit_message_text(
-            f"✅ <b>Activated: {skill['name']}</b>\n\n"
-            f"<i>{skill['description']}</i>\n\n"
-            f"🤖 Model: <code>{skill['model']}</code>\n"
-            f"🎲 Temperature: <code>{skill['temperature']}</code>",
-            parse_mode="HTML",
-        )
-    else:
-        await query.edit_message_text("❌ Invalid skill.")
 
 
 async def set_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -741,32 +669,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.commit()
                 conn.close()
 
-        # Determine which skill/model to use
-        detected_skill_id, detected_reason = auto_detect_skill(update.message.text or "")
-        manual_skill_id = get_user_skill(user_id)
-
-        skill_config = {}
-        active_skill_name = "Default AI"
-
-        if manual_skill_id and manual_skill_id in AI_SKILLS:
-            skill = AI_SKILLS[manual_skill_id]
-            model = skill.get("model", DEFAULT_MODEL)
-            skill_config["system_prompt"] = skill["system_prompt"]
-            skill_config["temperature"] = skill.get("temperature", 0.7)
-            skill_config["max_tokens"] = skill.get("max_tokens", 4096)
-            active_skill_name = skill["name"]
-        elif detected_skill_id and detected_skill_id in AI_SKILLS:
-            skill = AI_SKILLS[detected_skill_id]
-            model = skill.get("model", DEFAULT_MODEL)
-            skill_config["system_prompt"] = skill["system_prompt"]
-            skill_config["temperature"] = skill.get("temperature", 0.7)
-            skill_config["max_tokens"] = skill.get("max_tokens", 4096)
-            active_skill_name = f"{skill['name']} (auto)"
-        else:
-            model = get_user_model(user_id)
-            skill_config["system_prompt"] = get_user_system_prompt(user_id)
-            skill_config["temperature"] = 0.7
-            skill_config["max_tokens"] = 4096
+        # Determine model and settings
+        model = get_user_model(user_id)
+        system_prompt = get_user_system_prompt(user_id)
+        temperature = 0.7
+        max_tokens = 4096
 
         # Build user text
         user_text = ""
@@ -832,7 +739,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Build conversation context
         history = get_conversation(user_id, MAX_HISTORY)
-        system_prompt = skill_config["system_prompt"]
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
@@ -861,8 +767,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = await aclient.chat.completions.create(
             model=model,
             messages=messages,
-            temperature=skill_config["temperature"],
-            max_tokens=skill_config["max_tokens"],
+            temperature=temperature,
+            max_tokens=max_tokens,
             stream=True,
         )
 
@@ -881,7 +787,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
 
         # Final message with footer
-        footer = f"\n\n━━━━━━━━━━\n<i>🛠️ {html.escape(active_skill_name)}  •  🤖 {html.escape(model)}</i>"
+        footer = f"\n\n━━━━━━━━━━\n<i>🤖 {html.escape(model)}</i>"
         final_text = format_md(full_reply) + footer
         await sent_msg.edit_text(final_text, parse_mode="HTML")
 
@@ -919,19 +825,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(error_text, parse_mode="HTML")
         except Exception:
             logger.error(f"Failed to send error message: {e}")
-
-
-# ─────────────────────────────────────────────
-# Skill command handler
-# ─────────────────────────────────────────────
-async def skill_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generic handler for all skill commands."""
-    command = update.message.text.lstrip("/").split()[0].lower()
-    args = " ".join(update.message.text.split()[1:]) if len(update.message.text.split()) > 1 else ""
-
-    response = await handle_skill_command(command, update, context, args)
-    if response:
-        await send_chunks(update.message.chat, response, parse_mode="HTML")
 
 
 # ─────────────────────────────────────────────
@@ -1008,16 +901,10 @@ def main():
     application.add_handler(CommandHandler("export", export_chat))
     application.add_handler(CommandHandler("stats", user_stats))
     application.add_handler(CommandHandler("admin", admin_panel))
-    application.add_handler(CommandHandler("skill", skill_menu))
-
-    # Register ALL skill commands dynamically
-    for cmd_name in SKILL_COMMANDS:
-        application.add_handler(CommandHandler(cmd_name, skill_command_handler))
 
     # Callback handlers
     application.add_handler(CallbackQueryHandler(model_callback, pattern="^setmodel_"))
     application.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
-    application.add_handler(CallbackQueryHandler(skill_callback, pattern="^setskill_"))
 
     # Message handler - MUST be registered LAST to avoid intercepting commands
     application.add_handler(MessageHandler(
@@ -1042,12 +929,8 @@ def main():
             BotCommand("export", "Download chat history"),
             BotCommand("stats", "Show usage stats"),
             BotCommand("admin", "Admin panel"),
-            BotCommand("skill", "Choose AI persona"),
-            BotCommand("skills", "List all available skills"),
         ]
-        skill_cmds = get_skill_commands()
-        all_cmds = base_cmds + skill_cmds
-        await application.bot.set_my_commands(all_cmds)
+        await application.bot.set_my_commands(base_cmds)
 
     asyncio.get_event_loop().run_until_complete(set_commands())
 

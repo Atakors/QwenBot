@@ -4,7 +4,7 @@ A feature-rich Telegram bot powered by Qwen AI (DashScope/Alibaba Cloud).
 
 ## ✨ Features
 
-- 🤖 **Multi-Model Selection** — Switch between Qwen-Turbo, Plus, Max, Long, and VL-Max via inline keyboard
+- 🤖 **Multi-Model Selection** — Auto-fetches available models from your API, switch via inline keyboard
 - 🌊 **Streaming Responses** — See responses as they generate, no waiting
 - 🖼️ **Image Support** — Send images for vision analysis (Qwen-VL)
 - 🎤 **Voice Messages** — Send voice notes, auto-transcribed and replied to

@@ -782,14 +782,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if len(full_reply) % 80 < 5:
                     try:
                         display_text = format_md(full_reply)
+                        # Truncate if too long for single message
+                        if len(display_text) > 3500:
+                            display_text = display_text[:3500] + "\n\n<i>...</i>"
                         await sent_msg.edit_text(display_text, parse_mode="HTML")
                     except Exception:
                         pass
 
-        # Final message with footer
+        # Final message with footer - use send_chunks for long responses
         footer = f"\n\n━━━━━━━━━━\n<i>🤖 {html.escape(model)}</i>"
         final_text = format_md(full_reply) + footer
-        await sent_msg.edit_text(final_text, parse_mode="HTML")
+        
+        try:
+            await sent_msg.delete()
+        except Exception:
+            pass
+        
+        await send_chunks(update.message.chat, final_text, parse_mode="HTML")
 
         # Save assistant response
         save_message(user_id, "assistant", full_reply.strip())

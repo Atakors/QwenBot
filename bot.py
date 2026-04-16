@@ -472,7 +472,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Just type your message\n"
         f"• /model — Choose AI model\n"
         f"• /prompt — Customize my personality\n"
-        f"• /help — See all commands",
+        f"• /help — See all commands\n\n"
+        f"🧠 <b>Memory:</b> Your conversation history is saved automatically!",
         parse_mode="HTML",
     )
 
@@ -483,7 +484,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🚀 <b>Core:</b>\n"
         "  /start — Start the bot\n"
         "  /help — Show this message\n"
-        "  /clear — Clear conversation\n\n"
+        "  /clear — Clear conversation\n"
+        "  /context — View conversation history\n\n"
         "🤖 <b>AI Settings:</b>\n"
         "  /model — Change AI model\n"
         "  /prompt [text] — Set custom personality\n"
@@ -495,7 +497,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💡 <b>Tips:</b>\n"
         "  💬 Reply to any message to use as context\n"
         "  🖼️ Send an image for vision analysis\n"
-        "  🎤 Send a voice note for transcription + AI reply",
+        "  🎤 Send a voice note for transcription + AI reply\n"
+        "  🧠 <b>Memory:</b> Your conversation is saved automatically!",
         parse_mode="HTML",
     )
 
@@ -504,6 +507,35 @@ async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     clear_conversation(user_id)
     await update.message.reply_text("🗑️ <b>Conversation cleared!</b>\n\nYour chat history has been wiped. Start fresh! ✨", parse_mode="HTML")
+
+
+async def show_context(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show current conversation history."""
+    user_id = update.effective_user.id
+    history = get_conversation(user_id, MAX_HISTORY)
+    
+    if not history:
+        await update.message.reply_text(
+            "🧠 <b>Conversation Context</b>\n\n"
+            "No conversation history yet.\n\n"
+            "Start chatting and I'll remember everything we discuss! 💬",
+            parse_mode="HTML",
+        )
+        return
+    
+    text = f"🧠 <b>Conversation Context</b>\n\n"
+    text += f"<i>Showing last {len(history)//2} exchanges ({len(history)} messages in memory)</i>\n\n"
+    
+    for i, msg in enumerate(history[-10:], 1):  # Show last 10 messages
+        role_icon = "👤 You" if msg["role"] == "user" else "🤖 AI"
+        preview = msg["content"][:150].replace("\n", " ")
+        if len(msg["content"]) > 150:
+            preview += "..."
+        text += f"<b>{i}.</b> {role_icon}: <i>{html.escape(preview)}</i>\n\n"
+    
+    text += f"<i>Total messages: {len(history)} | Max history: {MAX_HISTORY * 2}</i>"
+    
+    await update.message.reply_text(text, parse_mode="HTML")
 
 
 async def show_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -516,10 +548,16 @@ async def show_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(f"{checkmark}{model_name}", callback_data=f"setmodel_{model_id}")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Count conversation history
+    history_count = len(get_conversation(user_id, MAX_HISTORY))
+    history_note = f"\n\n🧠 <b>Memory:</b> {history_count} messages in context (preserved when switching models)" if history_count > 0 else ""
+    
     await update.message.reply_text(
         f"🤖 <b>AI Model Selection</b>\n\n"
-        f"Current: <b>{html.escape(current_model)}</b>\n\n"
-        f"Choose a model below:",
+        f"Current: <b>{html.escape(current_model)}</b>{history_note}\n\n"
+        f"Choose a model below:\n"
+        f"<i>Your conversation history is automatically preserved when switching models</i>",
         parse_mode="HTML",
         reply_markup=reply_markup,
     )
@@ -533,9 +571,14 @@ async def model_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if selected_model in AVAILABLE_MODELS:
         set_user_model(user_id, selected_model)
+        # Check if there's conversation history
+        history_count = len(get_conversation(user_id, MAX_HISTORY))
+        memory_note = f"\n\n🧠 <b>Memory:</b> Your {history_count} previous messages are preserved and will be used as context." if history_count > 0 else ""
+        
         await query.edit_message_text(
             f"✅ <b>Model Updated!</b>\n\n"
-            f"Switched to: <b>{html.escape(selected_model)}</b>",
+            f"Switched to: <b>{html.escape(selected_model)}</b>"
+            f"{memory_note}",
             parse_mode="HTML",
         )
     else:
@@ -905,6 +948,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("clear", clear_history))
+    application.add_handler(CommandHandler("context", show_context))
     application.add_handler(CommandHandler("model", show_model))
     application.add_handler(CommandHandler("prompt", set_prompt))
     application.add_handler(CommandHandler("export", export_chat))
@@ -935,6 +979,7 @@ def main():
             BotCommand("model", "Change AI model"),
             BotCommand("prompt", "Set custom AI personality"),
             BotCommand("clear", "Clear conversation"),
+            BotCommand("context", "View conversation history"),
             BotCommand("export", "Download chat history"),
             BotCommand("stats", "Show usage stats"),
             BotCommand("admin", "Admin panel"),

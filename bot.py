@@ -965,6 +965,83 @@ async def url_fetch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 # ─────────────────────────────────────────────
+# Internet Tool Command Handlers
+# ─────────────────────────────────────────────
+async def web_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /search command."""
+    query = " ".join(context.args)
+    if not query:
+        await update.message.reply_text(
+            "🔍 <b>Web Search</b>\n\n"
+            "Usage: /search [your query]\n"
+            "Example: /search latest AI news",
+            parse_mode="HTML",
+        )
+        return
+    
+    await update.message.reply_text("🔍 <i>Searching the web...</i>", parse_mode="HTML")
+    result = await search_web_formatted(query)
+    await send_chunks(update.message.chat, result, parse_mode="HTML")
+
+
+async def url_fetch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /fetch command."""
+    if not context.args or not context.args[0]:
+        await update.message.reply_text(
+            "🌐 <b>URL Fetch</b>\n\n"
+            "Usage: /fetch [URL]\n"
+            "Example: /fetch https://example.com",
+            parse_mode="HTML",
+        )
+        return
+    
+    url = context.args[0]
+    await update.message.reply_text("🌐 <i>Fetching page content...</i>", parse_mode="HTML")
+    result = await summarize_url(url)
+    await send_chunks(update.message.chat, result, parse_mode="HTML")
+
+
+async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /weather command."""
+    city = " ".join(context.args)
+    if not city:
+        await update.message.reply_text(
+            "🌤️ <b>Weather</b>\n\n"
+            "Usage: /weather [city]\n"
+            "Example: /weather London",
+            parse_mode="HTML",
+        )
+        return
+    
+    await update.message.reply_text("🌤️ <i>Getting weather data...</i>", parse_mode="HTML")
+    result = await get_weather(city)
+    await update.message.reply_text(result, parse_mode="HTML")
+
+
+async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /stock command."""
+    symbol = " ".join(context.args)
+    if not symbol:
+        await update.message.reply_text(
+            "📈 <b>Crypto Prices</b>\n\n"
+            "Usage: /stock [symbol]\n"
+            "Examples: /stock BTC, /stock ETH, /stock SOL",
+            parse_mode="HTML",
+        )
+        return
+    
+    result = await get_crypto_price(symbol)
+    await update.message.reply_text(result, parse_mode="HTML")
+
+
+async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /news command."""
+    await update.message.reply_text("📰 <i>Fetching news...</i>", parse_mode="HTML")
+    result = await get_news()
+    await send_chunks(update.message.chat, result, parse_mode="HTML")
+
+
+# ─────────────────────────────────────────────
 # Document/File Handler
 # ─────────────────────────────────────────────
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1150,6 +1227,13 @@ def main():
     application.add_handler(CommandHandler("export", export_chat))
     application.add_handler(CommandHandler("stats", user_stats))
     application.add_handler(CommandHandler("admin", admin_panel))
+    
+    # Internet tool command handlers
+    application.add_handler(CommandHandler("search", web_search_command))
+    application.add_handler(CommandHandler("fetch", url_fetch_command))
+    application.add_handler(CommandHandler("weather", weather_command))
+    application.add_handler(CommandHandler("stock", stock_command))
+    application.add_handler(CommandHandler("news", news_command))
 
     # Callback handlers
     application.add_handler(CallbackQueryHandler(model_callback, pattern="^setmodel_"))

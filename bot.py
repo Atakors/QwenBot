@@ -41,6 +41,15 @@ from skills import (
     send_chunks,
     escape_html,
 )
+from tools import (
+    search_web_formatted,
+    summarize_url,
+    get_weather,
+    get_crypto_price,
+    get_news,
+    detect_tool,
+    save_file_metadata,
+)
 
 # ─────────────────────────────────────────────
 # Load environment
@@ -490,14 +499,22 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /model — Change AI model\n"
         "  /prompt [text] — Set custom personality\n"
         "  /prompt reset — Reset to default\n\n"
+        "🌐 <b>Internet Tools:</b>\n"
+        "  /search [query] — Search the web\n"
+        "  /fetch [url] — Fetch webpage content\n"
+        "  /weather [city] — Get live weather\n"
+        "  /stock [symbol] — Crypto prices (BTC, ETH...)\n"
+        "  /news — Top news headlines\n\n"
         "📊 <b>Tools:</b>\n"
         "  /export — Export chat as .txt\n"
         "  /stats — Your usage statistics\n"
         "  /admin — Admin panel\n\n"
         "💡 <b>Tips:</b>\n"
         "  💬 Reply to any message to use as context\n"
-        "  🖼️ Send an image for vision analysis\n"
-        "  🎤 Send a voice note for transcription + AI reply\n"
+        "  🖼️ Send images for vision analysis\n"
+        "  🎤 Send voice notes for transcription\n"
+        "  📎 Send documents for AI analysis\n"
+        "  🔗 Send URLs to fetch page content\n"
         "  🧠 <b>Memory:</b> Your conversation is saved automatically!",
         parse_mode="HTML",
     )
@@ -766,6 +783,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not user_text and not has_image:
             return
 
+        # ─────────────────────────────────────────
+        # Tool Detection - Handle internet requests
+        # ─────────────────────────────────────────
+        if update.message.text:
+            tool_name, tool_arg = detect_tool(update.message.text)
+            
+            if tool_name == "web_search":
+                await update.message.reply_text("🔍 <i>Searching the web...</i>", parse_mode="HTML")
+                result = await search_web_formatted(tool_arg)
+                await send_chunks(update.message.chat, result, parse_mode="HTML")
+                return
+            
+            elif tool_name == "url_fetch":
+                await update.message.reply_text("🌐 <i>Fetching page content...</i>", parse_mode="HTML")
+                result = await summarize_url(tool_arg)
+                await send_chunks(update.message.chat, result, parse_mode="HTML")
+                return
+            
+            elif tool_name == "weather":
+                await update.message.reply_text("🌤️ <i>Getting weather data...</i>", parse_mode="HTML")
+                result = await get_weather(tool_arg)
+                await update.message.reply_text(result, parse_mode="HTML")
+                return
+            
+            elif tool_name == "crypto":
+                result = await get_crypto_price(tool_arg)
+                await update.message.reply_text(result, parse_mode="HTML")
+                return
+            
+            elif tool_name == "news":
+                await update.message.reply_text("📰 <i>Fetching news...</i>", parse_mode="HTML")
+                result = await get_news()
+                await send_chunks(update.message.chat, result, parse_mode="HTML")
+                return
+            
+            elif tool_name == "url_in_message":
+                # If message contains a URL but no /fetch command, ask if user wants to fetch it
+                urls = re.findall(r"https?://\S+", update.message.text)
+                if urls and len(urls) == 1 and not update.message.reply_to_message:
+                    # Single URL in message - offer to fetch
+                    keyboard = [[InlineKeyboardButton("🌐 Fetch Page", callback_data=f"fetchurl_{urls[0]}")]]
+                    await update.message.reply_text(
+                        f"🔗 <b>Link detected!</b>\n\n"
+                        f"<i>{escape_html(urls[0][:80])}</i>\n\n"
+                        f"Would you like me to fetch and analyze this page?",
+                        parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                    )
+                    return
+
         # Auto model selection
         if model == "auto":
             model, _ = auto_select_model(user_text, has_image)
@@ -880,6 +947,135 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
+# URL Fetch Callback Handler
+# ─────────────────────────────────────────────
+async def url_fetch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle URL fetch button click."""
+    query = update.callback_query
+    await query.answer("🌐 Fetching page...")
+    
+    url = query.data.replace("fetchurl_", "")
+    user_id = query.from_user.id
+    
+    logger.info(f"User {user_id} requested URL fetch: {url[:80]}")
+    
+    # Fetch and summarize the URL
+    result = await summarize_url(url)
+    await send_chunks(query.message.chat, result, parse_mode="HTML")
+
+
+# ─────────────────────────────────────────────
+# Document/File Handler
+# ─────────────────────────────────────────────
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle document/file uploads from user."""
+    try:
+        user_id = update.effective_user.id
+        document = update.message.document
+        
+        # Get file info
+        file_name = document.file_name or "unknown_file"
+        file_size = document.file_size
+        mime_type = document.mime_type or "unknown"
+        
+        logger.info(f"Document from user {user_id}: {file_name} ({file_size} bytes)")
+        
+        # Check file size (Telegram limit is 20MB for bots)
+        if file_size > 20 * 1024 * 1024:
+            await update.message.reply_text(
+                "❌ <b>File too large!</b>\n\n"
+                "Maximum file size is 20MB. Please send a smaller file.",
+                parse_mode="HTML",
+            )
+            return
+        
+        # Download the file
+        await update.message.reply_text(
+            f"📎 <b>File received!</b>\n\n"
+            f"<b>Name:</b> {escape_html(file_name)}\n"
+            f"<b>Size:</b> {file_size / 1024:.1f} KB\n"
+            f"<b>Type:</b> {escape_html(mime_type)}\n\n"
+            f"<i>Sending to AI for analysis...</i>",
+            parse_mode="HTML",
+        )
+        
+        # Get file from Telegram
+        tg_file = await context.bot.get_file(document.file_id)
+        
+        # Save file metadata
+        save_file_metadata(user_id, document.file_id, file_name, mime_type)
+        
+        # For text files, read content and send to AI
+        text_extensions = [".txt", ".md", ".py", ".js", ".json", ".csv", ".html", ".xml", ".rst"]
+        is_text_file = any(file_name.lower().endswith(ext) for ext in text_extensions)
+        
+        if is_text_file:
+            try:
+                # Download file content
+                file_bytes = io.BytesIO()
+                await tg_file.download_to_memory(file_bytes)
+                file_bytes.seek(0)
+                
+                # Try to decode as text
+                try:
+                    content = file_bytes.read().decode("utf-8")[:8000]  # Limit content
+                except UnicodeDecodeError:
+                    content = "[Binary file - cannot read content]"
+                
+                # Send to AI for analysis
+                model = get_user_model(user_id)
+                system_prompt = get_user_system_prompt(user_id)
+                
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Analyze this file ({file_name}):\n\n{content}"},
+                ]
+                
+                response = await aclient.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=2048,
+                )
+                
+                analysis = response.choices[0].message.content
+                await send_chunks(update.message.chat, analysis, parse_mode="HTML")
+                
+            except Exception as e:
+                logger.error(f"Error analyzing file: {e}")
+                await update.message.reply_text(
+                    f"❌ <b>Analysis failed</b>\n\n"
+                    f"Could not analyze file content: {escape_html(str(e)[:100])}",
+                    parse_mode="HTML",
+                )
+        else:
+            # Non-text file - AI can still analyze with vision if it's an image
+            if mime_type.startswith("image/"):
+                await update.message.reply_text(
+                    "🖼️ <b>Image file received!</b>\n\n"
+                    "Send me a message and I'll analyze this image for you.",
+                    parse_mode="HTML",
+                )
+            else:
+                await update.message.reply_text(
+                    f"📎 <b>File stored successfully!</b>\n\n"
+                    f"File type: {escape_html(mime_type)}\n\n"
+                    f"<i>I've saved this file. Ask me to analyze or process it!</i>",
+                    parse_mode="HTML",
+                )
+        
+    except Exception as e:
+        logger.error(f"Error handling document: {e}", exc_info=True)
+        try:
+            await update.message.reply_text(
+                f"❌ <b>Error processing file</b>\n\n{escape_html(str(e)[:200])}",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+
+# ─────────────────────────────────────────────
 # Error handler
 # ─────────────────────────────────────────────
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -958,14 +1154,16 @@ def main():
     # Callback handlers
     application.add_handler(CallbackQueryHandler(model_callback, pattern="^setmodel_"))
     application.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
+    application.add_handler(CallbackQueryHandler(url_fetch_callback, pattern="^fetchurl_"))
 
-    # Message handler - MUST be registered LAST to avoid intercepting commands
+    # Message handlers - MUST be registered LAST to avoid intercepting commands
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
         handle_message
     ))
     application.add_handler(MessageHandler(filters.PHOTO, handle_message))
     application.add_handler(MessageHandler(filters.VOICE, handle_message))
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
     # Error handler
     application.add_error_handler(error_handler)
@@ -980,6 +1178,11 @@ def main():
             BotCommand("prompt", "Set custom AI personality"),
             BotCommand("clear", "Clear conversation"),
             BotCommand("context", "View conversation history"),
+            BotCommand("search", "Search the web"),
+            BotCommand("fetch", "Fetch webpage content"),
+            BotCommand("weather", "Get live weather"),
+            BotCommand("stock", "Get crypto prices"),
+            BotCommand("news", "Top news headlines"),
             BotCommand("export", "Download chat history"),
             BotCommand("stats", "Show usage stats"),
             BotCommand("admin", "Admin panel"),

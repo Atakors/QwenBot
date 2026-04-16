@@ -50,6 +50,11 @@ from tools import (
     detect_tool,
     save_file_metadata,
 )
+from cli_tools import (
+    run_cli_command,
+    format_cli_result,
+    CLI_COMMANDS,
+)
 
 # ─────────────────────────────────────────────
 # Load environment
@@ -505,6 +510,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /weather [city] — Get live weather\n"
         "  /stock [symbol] — Crypto prices (BTC, ETH...)\n"
         "  /news — Top news headlines\n\n"
+        "🖥️ <b>Admin CLI:</b>\n"
+        "  /cli — Bot control (admins only)\n"
+        "  /cli status — Check bot status\n"
+        "  /cli models — List AI models\n"
+        "  /cli stats — Usage statistics\n"
+        "  /cli logs — View bot logs\n"
+        "  /cli restart — Restart bot\n\n"
         "📊 <b>Tools:</b>\n"
         "  /export — Export chat as .txt\n"
         "  /stats — Your usage statistics\n"
@@ -1042,6 +1054,56 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
+# CLI Command Handler
+# ─────────────────────────────────────────────
+async def cli_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /cli command for bot control."""
+    user_id = update.effective_user.id
+    
+    # Check admin access
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text(
+            "🔒 <b>Admin Access Required</b>\n\n"
+            "CLI commands are restricted to administrators only.",
+            parse_mode="HTML",
+        )
+        return
+    
+    # Parse command
+    args = context.args
+    if not args:
+        # Show available commands
+        cmds_text = "🖥️ <b>CLI Commands</b>\n\n"
+        for name, data in sorted(CLI_COMMANDS.items()):
+            admin_badge = "🔒" if data["admin_only"] else "🟢"
+            cmds_text += f"{admin_badge} <code>/cli {name}</code> — {data['description']}\n"
+        
+        cmds_text += "\n<i>🔒 = Admin only | 🟢 = All admins</i>"
+        await update.message.reply_text(cmds_text, parse_mode="HTML")
+        return
+    
+    # Run command
+    cmd_name = args[0].lower()
+    cmd_args = " ".join(args[1:]) if len(args) > 1 else ""
+    
+    logger.info(f"CLI command from admin {user_id}: {cmd_name} {cmd_args}")
+    
+    # Check if command requires admin
+    if cmd_name in CLI_COMMANDS and CLI_COMMANDS[cmd_name]["admin_only"] and user_id not in ADMIN_IDS:
+        await update.message.reply_text("🔒 This command requires admin access.")
+        return
+    
+    await update.message.reply_text("⚙️ <i>Running command...</i>", parse_mode="HTML")
+    
+    # Execute CLI command
+    result = await run_cli_command(cmd_name, cmd_args)
+    
+    # Format and send result
+    formatted = format_cli_result(cmd_name, result)
+    await send_chunks(update.message.chat, formatted, parse_mode="HTML")
+
+
+# ─────────────────────────────────────────────
 # Document/File Handler
 # ─────────────────────────────────────────────
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1234,6 +1296,9 @@ def main():
     application.add_handler(CommandHandler("weather", weather_command))
     application.add_handler(CommandHandler("stock", stock_command))
     application.add_handler(CommandHandler("news", news_command))
+    
+    # CLI command handler (admin only)
+    application.add_handler(CommandHandler("cli", cli_command))
 
     # Callback handlers
     application.add_handler(CallbackQueryHandler(model_callback, pattern="^setmodel_"))
@@ -1267,6 +1332,7 @@ def main():
             BotCommand("weather", "Get live weather"),
             BotCommand("stock", "Get crypto prices"),
             BotCommand("news", "Top news headlines"),
+            BotCommand("cli", "Bot CLI control (admins only)"),
             BotCommand("export", "Download chat history"),
             BotCommand("stats", "Show usage stats"),
             BotCommand("admin", "Admin panel"),

@@ -808,22 +808,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.commit()
                 conn.close()
 
-        # Determine model and settings
-        user_model = get_user_model(user_id)
-        
-        # Auto-select model if user has "auto" selected or based on input
-        has_image = bool(update.message.photo)
-        if user_model == "auto":
-            model, model_reason = auto_select_model(user_text, has_image)
-        else:
-            model = user_model
-            model_reason = "👤 User selected"
-        
-        system_prompt = get_user_system_prompt(user_id)
-        temperature = 0.7
-        max_tokens = 4096
-
-        # Build user text
+        # Build user text first (needed for auto model selection)
         user_text = ""
 
         # Text message
@@ -835,6 +820,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_text = (
                 f"Referencing this message:\n> {update.message.reply_to_message.text}\n\n{user_text or 'Respond to this:'}"
             )
+
+        # Determine model and settings
+        user_model = get_user_model(user_id)
+        
+        # Auto-select model based on input
+        has_image = bool(update.message.photo)
+        if user_model == "auto":
+            model, model_reason = auto_select_model(user_text, has_image)
+        else:
+            model = user_model
+            model_reason = "👤 User selected"
+
+        system_prompt = get_user_system_prompt(user_id)
+        temperature = 0.7
+        max_tokens = 4096
 
         # Image handling
         photo = update.message.photo[-1] if update.message.photo else None

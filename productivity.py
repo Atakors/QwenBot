@@ -4,6 +4,7 @@ Productivity Integrations for Qwen Telegram Bot
 Includes: GitHub, Notion, Image Generation, Google Drive, Calendar, Tasks
 """
 
+import asyncio
 import html
 import os
 import re
@@ -29,46 +30,79 @@ IMAGE_GENERATION_MODEL = os.getenv("IMAGE_MODEL", "dall-e-3")
 # Image Generation 🎨
 # ─────────────────────────────────────────────
 async def generate_image(prompt: str, size: str = "1024x1024") -> dict:
-    """Generate image using configured API."""
+    """Generate image using Alibaba DashScope Wanx API."""
     result = {"success": False, "url": None, "error": None}
     
     try:
-        # Try DALL-E 3 first
-        openai_key = os.getenv("OPENAI_API_KEY", "")
-        if openai_key and IMAGE_GENERATION_MODEL == "dall-e-3":
-            client = OpenAI(api_key=openai_key)
-            response = client.images.generate(
-                model="dall-e-3",
-                prompt=prompt,
-                size=size,
-                quality="standard",
-                n=1,
-            )
-            result["success"] = True
-            result["url"] = response.data[0].url
-            result["revised_prompt"] = response.data[0].revised_prompt
+        api_key = os.getenv("DASHSCOPE_API_KEY", "")
+        if not api_key:
+            result["error"] = "DASHSCOPE_API_KEY not configured"
             return result
         
-        # Try Gemini Image
-        gemini_key = os.getenv("GEMINI_API_KEY", "")
-        if gemini_key:
-            # Use Gemini via HTTP
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1/models/imagen-001:predict",
-                    headers={"Authorization": f"Bearer {gemini_key}"},
-                    json={"prompt": prompt},
+        # Use Wanx 2.7 for image generation via DashScope SDK-style API
+        async with httpx.AsyncClient(timeout=120) as client:
+            # Submit generation task
+            submit_resp = await client.post(
+                "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "X-DashScope-Async": "enable",
+                },
+                json={
+                    "model": "wan2.7-image-pro",
+                    "input": {"prompt": prompt},
+                    "parameters": {
+                        "size": "1024x1024",
+                        "n": 1,
+                        "style": "<auto>",
+                    },
+                },
+            )
+            
+            if submit_resp.status_code != 200:
+                result["error"] = f"Submit failed: {submit_resp.status_code} - {submit_resp.text[:200]}"
+                return result
+            
+            submit_data = submit_resp.json()
+            task_id = submit_data.get("output", {}).get("task_id")
+            
+            if not task_id:
+                result["error"] = "No task_id returned from API"
+                return result
+            
+            # Poll for result
+            for attempt in range(30):  # Wait up to 90 seconds
+                await asyncio.sleep(3)
+                
+                status_resp = await client.get(
+                    f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}",
+                    headers={"Authorization": f"Bearer {api_key}"}
                 )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    # Handle response format
-                    result["success"] = True
-                    result["url"] = data.get("image", {}).get("url")
-                    return result
-        
-        # Fallback to Qwen VL for image understanding (not generation)
-        result["error"] = "No image generation API configured. Set OPENAI_API_KEY or GEMINI_API_KEY"
-        return result
+                
+                if status_resp.status_code == 200:
+                    status_data = status_resp.json()
+                    task_status = status_data.get("output", {}).get("task_status", "")
+                    
+                    if task_status == "SUCCEEDED":
+                        # Get image URL from output
+                        output = status_data.get("output", {})
+                        if "results" in output:
+                            result["success"] = True
+                            result["url"] = output["results"][0].get("url")
+                            return result
+                        elif "task_output" in output:
+                            task_output = output.get("task_output", {})
+                            if "url" in task_output:
+                                result["success"] = True
+                                result["url"] = task_output["url"]
+                                return result
+                    elif task_status in ["FAILED", "CANCELED"]:
+                        result["error"] = f"Task failed: {status_data.get('output', {}).get('message', 'Unknown error')}"
+                        return result
+            
+            result["error"] = "Generation timed out (took too long)"
+            return result
         
     except Exception as e:
         result["error"] = str(e)[:200]

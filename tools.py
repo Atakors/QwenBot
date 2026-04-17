@@ -44,8 +44,34 @@ def split_message(text: str, limit: int = 4096) -> list[str]:
 # Web Search 🔍
 # ─────────────────────────────────────────────
 async def web_search(query: str, num_results: int = 5) -> list[dict]:
-    """Search the web using DuckDuckGo HTML interface."""
+    """Search the web using You.com API (preferred) or DuckDuckGo fallback."""
     results = []
+    
+    # Try You.com API first
+    you_api_key = os.getenv("YOU_API_KEY", "")
+    if you_api_key:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    "https://api.ydc-index.io/search",
+                    params={"query": query, "num_webpages": num_results},
+                    headers={"X-API-Key": you_api_key}
+                )
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    hits = data.get("hits", [])
+                    for hit in hits[:num_results]:
+                        results.append({
+                            "title": hit.get("title", "No title"),
+                            "url": hit.get("url", ""),
+                            "snippet": hit.get("snippet", "")[:200],
+                        })
+                    return results
+        except Exception as e:
+            print(f"You.com API error: {e}, falling back to DuckDuckGo")
+    
+    # Fallback to DuckDuckGo
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             resp = await client.get(
@@ -57,7 +83,6 @@ async def web_search(query: str, num_results: int = 5) -> list[dict]:
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, "html.parser")
                 
-                # Extract results
                 for result in soup.select(".result")[:num_results]:
                     title_elem = result.select_one(".result__a")
                     snippet_elem = result.select_one(".result__snippet")

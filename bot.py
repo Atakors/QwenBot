@@ -98,6 +98,52 @@ DEFAULT_SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
     "You are a helpful AI assistant powered by Qwen. Respond concisely and helpfully.",
 )
+
+# ─────────────────────────────────────────────
+# Auto Model Selection
+# ─────────────────────────────────────────────
+AUTO_MODEL_PATTERNS = [
+    # Vision models for images
+    (r"(analyze|describe|explain|what.*in|what.*at|see|look|view|show|image|photo|picture|diagram|chart|graph|screenshot)", "qwen-vl-max"),
+    
+    # Long context for documents/code
+    (r"(long|document|paper|article|report|book|chapter|thesis|codebase|multiple files|entire)", "qwen-long"),
+    
+    # Complex reasoning
+    (r"(solve|prove|derive|calculate|equation|formula|theorem|logic|reason|complex|hard|difficult)", "qwen-max"),
+    
+    # Creative writing
+    (r"(write|create|compose|draft|poem|story|article|blog|email|letter|script|content)", "qwen-plus"),
+    
+    # Code generation
+    (r"(code|program|function|class|module|script|debug|fix bug|implement|algorithm|data structure)", "qwen-coder-plus"),
+    
+    # Math
+    (r"(\d+\s*[\+\-\*\/]\s*\d+|equation|integral|derivative|matrix|vector|geometry|algebra|calculus)", "qwen-max"),
+    
+    # Simple queries - use turbo for speed
+    (r"(hi|hello|hey|thanks|ok|yes|no|what|when|where|who|why|how|define|explain|simple|quick)", "qwen-turbo"),
+]
+
+
+def auto_select_model(user_text: str, has_image: bool = False) -> tuple[str, str]:
+    """
+    Automatically select the best model based on user input.
+    Returns (model_name, reason)
+    """
+    # Image always goes to VL model
+    if has_image:
+        return "qwen-vl-max", "👁️ Image detected"
+    
+    user_text = user_text.lower()
+    
+    # Check patterns in order (first match wins)
+    for pattern, model in AUTO_MODEL_PATTERNS:
+        if re.search(pattern, user_text, re.IGNORECASE):
+            return model, "🤖 Auto-selected"
+    
+    # Default to turbo for speed
+    return "qwen-turbo", "⚡ Default"
 ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 RATE_LIMIT_SECONDS = int(os.getenv("RATE_LIMIT_SECONDS", "3"))
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "10"))
@@ -517,7 +563,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 <b>AI Settings:</b>\n"
         "  /model — Change AI model\n"
         "  /prompt [text] — Set custom personality\n"
-        "  /prompt reset — Reset to default\n\n"
+        "  /prompt reset — Reset to default\n"
+        "  🤖 <b>Auto Mode:</b> Select 'Auto' in /model to let AI pick the best model!\n\n"
         "🌐 <b>Internet Tools:</b>\n"
         "  /search [query] — Search the web\n"
         "  /fetch [url] — Fetch webpage content\n"
@@ -762,7 +809,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.close()
 
         # Determine model and settings
-        model = get_user_model(user_id)
+        user_model = get_user_model(user_id)
+        
+        # Auto-select model if user has "auto" selected or based on input
+        has_image = bool(update.message.photo)
+        if user_model == "auto":
+            model, model_reason = auto_select_model(user_text, has_image)
+        else:
+            model = user_model
+            model_reason = "👤 User selected"
+        
         system_prompt = get_user_system_prompt(user_id)
         temperature = 0.7
         max_tokens = 4096
@@ -865,11 +921,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     return
 
-        # Auto model selection
-        if model == "auto":
-            model, _ = auto_select_model(user_text, has_image)
-            logger.info(f"Auto-selected model: {model}")
-
         # Rate limit check
         allowed, wait_time = check_rate_limit(user_id)
         if not allowed:
@@ -932,7 +983,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
 
         # Final message with footer - use send_chunks for long responses
-        footer = f"\n\n━━━━━━━━━━\n<i>🤖 {html.escape(model)}</i>"
+        footer = f"\n\n━━━━━━━━━━\n<i>{model_reason} · 🤖 {html.escape(model)}</i>"
         final_text = format_md(full_reply) + footer
         
         try:

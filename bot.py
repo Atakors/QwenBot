@@ -55,6 +55,20 @@ from cli_tools import (
     format_cli_result,
     CLI_COMMANDS,
 )
+from productivity import (
+    generate_image,
+    github_get_user_info,
+    github_list_repos,
+    github_get_issue,
+    github_search,
+    notion_search,
+    notion_create_page,
+    notion_get_database,
+    format_github_user,
+    format_github_repos,
+    format_notion_results,
+    detect_productivity_command,
+)
 
 # ─────────────────────────────────────────────
 # Load environment
@@ -514,9 +528,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /cli — Bot control (admins only)\n"
         "  /cli status — Check bot status\n"
         "  /cli models — List AI models\n"
-        "  /cli stats — Usage statistics\n"
-        "  /cli logs — View bot logs\n"
-        "  /cli restart — Restart bot\n\n"
+        "  /cli stats — Usage statistics\n\n"
+        "🎨 <b>Productivity:</b>\n"
+        "  /image [prompt] — Generate AI image\n"
+        "  /github [user] — GitHub profile\n"
+        "  /repo [user] — GitHub repositories\n"
+        "  /issue [repo] [num] — GitHub issue/PR\n"
+        "  /gitsearch [query] — Search GitHub\n"
+        "  /notion [query] — Search Notion pages\n"
+        "  /notionpage [title] [content] — Create Notion page\n\n"
         "📊 <b>Tools:</b>\n"
         "  /export — Export chat as .txt\n"
         "  /stats — Your usage statistics\n"
@@ -1054,6 +1074,174 @@ async def news_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
+# Productivity Command Handlers
+# ─────────────────────────────────────────────
+async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /image command for image generation."""
+    prompt = " ".join(context.args)
+    if not prompt:
+        await update.message.reply_text(
+            "🎨 <b>Image Generation</b>\n\n"
+            "Usage: /image [description]\n"
+            "Example: /image a sunset over mountains\n\n"
+            "Configure OPENAI_API_KEY or GEMINI_API_KEY in .env",
+            parse_mode="HTML",
+        )
+        return
+    
+    await update.message.reply_text(
+        "🎨 <i>Generating image... (this may take 30-60 seconds)</i>",
+        parse_mode="HTML",
+    )
+    
+    result = await generate_image(prompt)
+    
+    if result["success"] and result.get("url"):
+        await update.message.reply_photo(
+            photo=result["url"],
+            caption=f"🎨 <b>Prompt:</b> {escape_html(prompt)}\n\n<i>Generated with AI</i>",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ <b>Image generation failed</b>\n\n{escape_html(result.get('error', 'Unknown error'))}",
+            parse_mode="HTML",
+        )
+
+
+async def github_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /github command."""
+    username = " ".join(context.args)
+    if not username:
+        await update.message.reply_text(
+            "🐙 <b>GitHub</b>\n\n"
+            "Usage: /github [username]\n"
+            "Example: /github torvalds\n\n"
+            "Set GITHUB_TOKEN in .env for higher rate limits",
+            parse_mode="HTML",
+        )
+        return
+    
+    await update.message.reply_text("🐙 <i>Fetching GitHub profile...</i>", parse_mode="HTML")
+    result = await github_get_user_info(username.strip())
+    await update.message.reply_text(format_github_user(result), parse_mode="HTML")
+
+
+async def github_repos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /repo command."""
+    username = " ".join(context.args)
+    if not username:
+        await update.message.reply_text(
+            "🐙 <b>GitHub Repositories</b>\n\n"
+            "Usage: /repo [username]\n"
+            "Example: /repo microsoft",
+            parse_mode="HTML",
+        )
+        return
+    
+    await update.message.reply_text("🐙 <i>Fetching repositories...</i>", parse_mode="HTML")
+    result = await github_list_repos(username.strip())
+    await send_chunks(update.message.chat, format_github_repos(result), parse_mode="HTML")
+
+
+async def github_issue_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /issue command."""
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "🐙 <b>GitHub Issue</b>\n\n"
+            "Usage: /issue [repo] [number]\n"
+            "Example: /issue microsoft/vscode 12345",
+            parse_mode="HTML",
+        )
+        return
+    
+    repo, number = args[0], args[1]
+    await update.message.reply_text("🐙 <i>Fetching issue...</i>", parse_mode="HTML")
+    result = await github_get_issue(repo, number)
+    
+    if result.get("success"):
+        type_emoji = "🔀" if result.get("is_pr") else "📋"
+        state_emoji = "🟢" if result.get("state") == "open" else "🔴"
+        text = (
+            f"{type_emoji} <b>#{result['number']} - {escape_html(result['title'])}</b>\n\n"
+            f"{state_emoji} <b>State:</b> {result['state']}\n"
+            f"👤 <b>Author:</b> {escape_html(result['user'])}\n"
+            f"💬 <b>Comments:</b> {result['comments']}\n\n"
+            f"<i>{escape_html(result['body'][:500] or 'No description')}</i>"
+        )
+        await update.message.reply_text(text, parse_mode="HTML")
+    else:
+        await update.message.reply_text(f"❌ {escape_html(result.get('error'))}", parse_mode="HTML")
+
+
+async def github_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /gitsearch command."""
+    query = " ".join(context.args)
+    if not query:
+        await update.message.reply_text(
+            "🐙 <b>GitHub Search</b>\n\n"
+            "Usage: /gitsearch [query]\n"
+            "Example: /gitsearch python machine learning",
+            parse_mode="HTML",
+        )
+        return
+    
+    await update.message.reply_text("🐙 <i>Searching GitHub...</i>", parse_mode="HTML")
+    result = await github_search(query)
+    
+    if result.get("success"):
+        text = f"🐙 <b>Search Results ({result['total']} found)</b>\n\n"
+        for i, repo in enumerate(result["repos"], 1):
+            text += f"<b>{i}.</b> <a href='{escape_html(repo['url'])}'>{escape_html(repo['name'])}</a>\n"
+            text += f"   <i>{escape_html(repo['description'][:100])}</i>\n"
+            text += f"   ⭐ {repo['stars']} · {repo.get('language', 'N/A')}\n\n"
+        await send_chunks(update.message.chat, text, parse_mode="HTML")
+    else:
+        await update.message.reply_text(f"❌ {escape_html(result.get('error'))}", parse_mode="HTML")
+
+
+async def notion_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /notion command."""
+    query = " ".join(context.args)
+    
+    await update.message.reply_text("📝 <i>Searching Notion...</i>", parse_mode="HTML")
+    result = await notion_search(query)
+    await update.message.reply_text(format_notion_results(result), parse_mode="HTML")
+
+
+async def notion_create_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /notionpage command."""
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "📝 <b>Create Notion Page</b>\n\n"
+            "Usage: /notionpage [title] [content]\n"
+            "Example: /notionpage Meeting Notes Discussed project roadmap",
+            parse_mode="HTML",
+        )
+        return
+    
+    title = args[0]
+    content = " ".join(args[1:])
+    
+    result = await notion_create_page(title, content)
+    
+    if result.get("success"):
+        await update.message.reply_text(
+            f"✅ <b>Page created!</b>\n\n"
+            f"<b>Title:</b> {escape_html(title)}\n"
+            f"🔗 <a href='{escape_html(result['url'])}'>Open in Notion</a>",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ <b>Failed to create page</b>\n\n{escape_html(result.get('error'))}",
+            parse_mode="HTML",
+        )
+
+
+# ─────────────────────────────────────────────
 # CLI Command Handler
 # ─────────────────────────────────────────────
 async def cli_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1299,6 +1487,17 @@ def main():
     
     # CLI command handler (admin only)
     application.add_handler(CommandHandler("cli", cli_command))
+    
+    # Productivity command handlers
+    application.add_handler(CommandHandler("image", image_command))
+    application.add_handler(CommandHandler("imagine", image_command))
+    application.add_handler(CommandHandler("github", github_command))
+    application.add_handler(CommandHandler("gh", github_command))
+    application.add_handler(CommandHandler("repo", github_repos_command))
+    application.add_handler(CommandHandler("issue", github_issue_command))
+    application.add_handler(CommandHandler("gitsearch", github_search_command))
+    application.add_handler(CommandHandler("notion", notion_command))
+    application.add_handler(CommandHandler("notionpage", notion_create_command))
 
     # Callback handlers
     application.add_handler(CallbackQueryHandler(model_callback, pattern="^setmodel_"))
@@ -1333,6 +1532,13 @@ def main():
             BotCommand("stock", "Get crypto prices"),
             BotCommand("news", "Top news headlines"),
             BotCommand("cli", "Bot CLI control (admins only)"),
+            BotCommand("image", "Generate AI image"),
+            BotCommand("github", "View GitHub profile"),
+            BotCommand("repo", "List GitHub repositories"),
+            BotCommand("issue", "Get GitHub issue/PR"),
+            BotCommand("gitsearch", "Search GitHub repos"),
+            BotCommand("notion", "Search Notion pages"),
+            BotCommand("notionpage", "Create Notion page"),
             BotCommand("export", "Download chat history"),
             BotCommand("stats", "Show usage stats"),
             BotCommand("admin", "Admin panel"),

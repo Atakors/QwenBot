@@ -44,7 +44,7 @@ def split_message(text: str, limit: int = 4096) -> list[str]:
 # Web Search 🔍
 # ─────────────────────────────────────────────
 async def web_search(query: str, num_results: int = 5) -> list[dict]:
-    """Search the web using You.com API (preferred) or DuckDuckGo fallback."""
+    """Search the web using You.com API (if available) or DuckDuckGo fallback."""
     results = []
     
     # Try You.com API first
@@ -68,30 +68,42 @@ async def web_search(query: str, num_results: int = 5) -> list[dict]:
                             "snippet": hit.get("snippet", "")[:200],
                         })
                     return results
+                elif resp.status_code == 403:
+                    print(f"You.com API: Invalid/expired API key, using DuckDuckGo")
         except Exception as e:
-            print(f"You.com API error: {e}, falling back to DuckDuckGo")
+            print(f"You.com API error: {e}, using DuckDuckGo")
     
     # Fallback to DuckDuckGo
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=15,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+        ) as client:
             resp = await client.get(
                 "https://html.duckduckgo.com/html/",
                 params={"q": query},
-                headers={"User-Agent": "Mozilla/5.0"},
             )
             
             if resp.status_code == 200:
                 soup = BeautifulSoup(resp.text, "html.parser")
                 
-                for result in soup.select(".result")[:num_results]:
-                    title_elem = result.select_one(".result__a")
-                    snippet_elem = result.select_one(".result__snippet")
-                    url_elem = result.select_one(".result__url")
+                # Try multiple selectors for DuckDuckGo
+                results_elms = soup.select(".result, .web-result, div.results a.result__a")
+                
+                for result in results_elms[:num_results]:
+                    title_elem = result.select_one(".result__a, a.result__a")
+                    snippet_elem = result.select_one(".result__snippet, .result__body")
                     
                     if title_elem:
+                        # Get URL - might be relative
+                        url = title_elem.get("href", "")
+                        if url.startswith("//"):
+                            url = "https:" + url
+                        
                         results.append({
                             "title": title_elem.get_text(strip=True),
-                            "url": url_elem.get("href", "") if url_elem else "",
+                            "url": url,
                             "snippet": snippet_elem.get_text(strip=True)[:200] if snippet_elem else "",
                         })
     except Exception as e:
